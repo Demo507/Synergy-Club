@@ -7,9 +7,20 @@ export const setToken = (t: string) => {
 };
 export const getToken = () => jwt;
 
+async function request(path: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await fetch(API + path, init);
+    } catch {
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 6000));
+    }
+  }
+  throw new Error(`Cannot reach the server at ${API}. Check your connection or try again in a minute.`);
+}
+
 // GET when no body is given, POST (JSON) otherwise.
 export async function api(path: string, body?: unknown): Promise<any> {
-  const res = await fetch(API + path, {
+  const res = await request(path, {
     method: body === undefined ? "GET" : "POST",
     headers: { "Content-Type": "application/json", ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
