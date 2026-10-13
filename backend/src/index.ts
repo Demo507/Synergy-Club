@@ -69,7 +69,7 @@ async function makeInvite(owner: string): Promise<string> {
 }
 
 // ---------- auth ----------
-app.get("/api/health", (_req, res) => {
+app.get(" /api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
