@@ -1,62 +1,38 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { ethers } from "ethers";
 import { api } from "@/lib/api";
 import { readContract, writeContract } from "@/config/web3";
-import { btn, btnGhost, card, input } from "@/lib/ui";
+import { btn, card, input } from "@/lib/ui";
 
 export default function RegisterTab({ account, code, onDone }: { account: string; code: string; onDone: () => Promise<void> }) {
   const [form, setForm] = useState({
     name: "", age: "", isDrugAddict: "no", isDrunker: "no", isCultist: "no", intentions: "", phoneNumber: "", email: "",
   });
   const [accepted, setAccepted] = useState(false);
-  const [photo, setPhoto] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
-  const stopCamera = () => streamRef.current?.getTracks().forEach((t) => t.stop());
-  useEffect(() => () => stopCamera(), []);
-
-  const startCamera = async () => {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: true });
-      streamRef.current = s;
-      setPhoto(null);
-      if (videoRef.current) videoRef.current.srcObject = s;
-    } catch {
-      alert("Camera permission denied.");
-    }
-  };
-
-  const snap = () => {
-    const v = videoRef.current;
-    if (!v || !v.videoWidth) return alert("Start the camera first.");
-    const size = Math.min(v.videoWidth, v.videoHeight);
-    const c = document.createElement("canvas");
-    c.width = 320;
-    c.height = 320;
-    c.getContext("2d")!.drawImage(v, (v.videoWidth - size) / 2, (v.videoHeight - size) / 2, size, size, 0, 0, 320, 320);
-    setPhoto(c.toDataURL("image/jpeg", 0.7));
-    stopCamera();
-  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!photo) return alert("Take your photo first.");
     if (!accepted) return alert("Please accept the terms.");
     setBusy(true);
+    let step = "checking payment on the blockchain";
     try {
-      if (!(await readContract().hasPaidRegistration(account))) {
+      const paid = await readContract().hasPaidRegistration(account);
+      if (!paid) {
+        step = "sending the 0.0001 ETH payment";
         const tx = await (await writeContract()).payRegistrationFee({ value: ethers.parseEther("0.0001") });
+        step = "waiting for payment confirmation";
         await tx.wait();
       }
-      await api("/api/register", { ...form, code, photo });
+      step = "saving your details to the server";
+      await api("/api/register", { ...form, code });
       await onDone();
     } catch (err: any) {
-      alert(err.shortMessage || err.message || "Registration failed");
+      alert(`Failed while ${step}: ` + (err.shortMessage || err.message || "unknown error"));
     }
     setBusy(false);
   };
@@ -74,7 +50,7 @@ export default function RegisterTab({ account, code, onDone }: { account: string
   return (
     <form onSubmit={submit} className={card + " space-y-4"}>
       <h2 className="font-mono font-bold text-amber-400 uppercase tracking-widest">Register</h2>
-      <p className="text-xs text-neutral-400">Step 1: fill the form and take a photo. Step 2: confirm the 0.0001 ETH registration fee in your wallet.</p>
+      <p className="text-xs text-neutral-400">Fill the form, then confirm the 0.0001 ETH registration fee in your wallet.</p>
       <input className={input} placeholder="Full name" required value={form.name} onChange={(e) => set("name", e.target.value)} />
       <input className={input} placeholder="Age (18+)" type="number" min={18} required value={form.age} onChange={(e) => set("age", e.target.value)} />
       <div className="grid sm:grid-cols-3 gap-3">
@@ -85,16 +61,6 @@ export default function RegisterTab({ account, code, onDone }: { account: string
       <textarea className={input} rows={3} placeholder="Why do you want to join? Your intentions" required value={form.intentions} onChange={(e) => set("intentions", e.target.value)} />
       <input className={input} placeholder="Phone number" required value={form.phoneNumber} onChange={(e) => set("phoneNumber", e.target.value)} />
       <input className={input} placeholder="Email" type="email" required value={form.email} onChange={(e) => set("email", e.target.value)} />
-
-      <div className="space-y-2">
-        <video ref={videoRef} autoPlay playsInline muted className={photo ? "hidden" : "w-48 h-48 object-cover rounded-lg bg-neutral-950"} />
-        {photo && <img src={photo} alt="Your snapshot" className="w-48 h-48 rounded-lg object-cover" />}
-        <div className="flex gap-2">
-          <button type="button" onClick={startCamera} className={btnGhost}>{photo ? "Retake" : "Start camera"}</button>
-          {!photo && <button type="button" onClick={snap} className={btnGhost}>Capture</button>}
-        </div>
-      </div>
-
       <label className="flex gap-2 text-xs text-neutral-300">
         <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} />
         I confirm my information is true. I understand fees are not refunded if any information is false.
