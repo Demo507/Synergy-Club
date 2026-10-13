@@ -21,23 +21,19 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
-// Dynamically handle allowed origins to prevent "Failed to Fetch" on Vercel deployment
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://vercel.app"
-];
-
-if (env.FRONTEND_URL) {
-  allowedOrigins.push(env.FRONTEND_URL);
-}
-
+// Dynamically allow local development and ANY production or preview deployment from Vercel
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow server-to-server or tools with no origin headers
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
+    
+    const isLocal = origin.startsWith("http://localhost:");
+    const isVercel = origin.endsWith(".vercel.app");
+
+    if (isLocal || isVercel) {
       return callback(null, true);
     } else {
-      return callback(new Error("Not allowed by CORS"));
+      return callback(new Error("Blocked by global CORS policy"));
     }
   },
   credentials: true
@@ -47,9 +43,17 @@ app.use(express.json({ limit: "2mb" }));
 app.use(["/api/auth", "/api/gate"], rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }));
 
 const server = http.createServer(app);
+
+// Mirror dynamic CORS support inside Socket.io initialization
 const io = new Server(server, { 
   cors: { 
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      const isLocal = origin.startsWith("http://localhost:");
+      const isVercel = origin.endsWith(".vercel.app");
+      if (isLocal || isVercel) return callback(null, true);
+      return callback(new Error("CORS blocked"));
+    },
     credentials: true
   } 
 });
@@ -272,15 +276,15 @@ app.post(
   })
 );
 
-// Error Handler Middleware
+// General Global Error Fallback Middleware
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
+  console.error("Global Catch Error Trace: ", err);
   res.status(500).json({ message: "Internal server error." });
 });
 
-// Start Server
+// Start Server configuration
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server executing seamlessly on port ${PORT}`);
 });
 
