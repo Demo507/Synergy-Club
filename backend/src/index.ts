@@ -20,12 +20,40 @@ import { club } from "./chain";
 const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-app.use(cors({ origin: env.FRONTEND_URL }));
+
+// Dynamically handle allowed origins to prevent "Failed to Fetch" on Vercel deployment
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://vercel.app"
+];
+
+if (env.FRONTEND_URL) {
+  allowedOrigins.push(env.FRONTEND_URL);
+}
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    } else {
+      return callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json({ limit: "2mb" }));
 app.use(["/api/auth", "/api/gate"], rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }));
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: env.FRONTEND_URL } });
+const io = new Server(server, { 
+  cors: { 
+    origin: allowedOrigins,
+    credentials: true
+  } 
+});
+
 const upload = multer({ dest: path.join(__dirname, "..", "uploads"), limits: { fileSize: 200 * 1024 * 1024 } });
 
 // ---------- helpers ----------
@@ -235,30 +263,24 @@ app.post(
   requireAdmin,
   h(async (req, res) => {
     const wallet = lower(req.body.wallet);
-    if (!(await club.isApproved(wallet))) return res.status(400).json({ message: "Wallet approval condition failed." });
+    const profile = await UserProfile.findOne({ walletAddress: wallet });
+    if (!profile) return res.status(404).json({ message: "Profile not found." });
     
-    await UserProfile.updateOne({ walletAddress: wallet }, { status: "APPROVED" });
+    profile.status = "APPROVED";
+    await profile.save();
     return res.json({ ok: true });
   })
 );
 
-// ---------- database connection & server initialization ----------
+// Error Handler Middleware
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error(err);
+  res.status(500).json({ message: "Internal server error." });
+});
+
+// Start Server
 const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 
-// Valid connection string logic that handles dynamic checks perfectly
-const DB_CONNECTION_STRING = 
-  typeof env.MONGO_URI === "string" && env.MONGO_URI.startsWith("mongodb")
-    ? env.MONGO_URI
-    : "mongodb+srv://mosesfoodstuffventures_db_user:fQ97u4y8CqfJ2C49@cluster0.gfxzhot.mongodb.net/mosesfoodstuff?appName=Cluster0";
-
-mongoose
-  .connect(DB_CONNECTION_STRING)
-  .then(() => {
-    console.log("🚀 Connected to MongoDB successfully at database: mosesfoodstuff");
-    server.listen(PORT, () => {
-      console.log(`📡 Server running smoothly on port ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("❌ MongoDB connection failed error context:", err);
-  });
