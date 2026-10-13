@@ -17,7 +17,10 @@ import { club } from "./chain";
 const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-const origins = [ "http://localhosthost:3000", "http://vercel.app"];
+const origins = [ 
+  "http://localhost:3000", 
+  "https://synergy-club-brown.vercel.app" 
+];
 app.use(cors({ origin: origins, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 app.use(["/api/auth", "/api/gate"], rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }));
