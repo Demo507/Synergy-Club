@@ -15,7 +15,15 @@ import { ADMIN, issueNonce, requireAuth, verifyLogin, verifyToken } from "./auth
 import { club } from "./chain";
 
 const app = express();
+
+// ADD THIS TRACKING CODE BLOCK RIGHT HERE:
+app.use((req, res, next) => {
+  console.log(`🔍 Incoming Request Method: ${req.method} | URL: ${req.url}`);
+  next();
+});
+
 app.set("trust proxy", 1);
+
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 const origins = [ 
   "http://localhost:3000", 
