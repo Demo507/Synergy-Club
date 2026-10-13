@@ -17,8 +17,8 @@ import { club } from "./chain";
 const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-const origins = env.FRONTEND_URL.split(",").map((o) => o.trim().replace(/\/$/, ""));
-app.use(cors({ origin: origins }));
+const origins = [ "http://localhosthost:3000", "http://vercel.app"];
+app.use(cors({ origin: origins, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 app.use(["/api/auth", "/api/gate"], rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }));
 
