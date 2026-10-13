@@ -1,6 +1,3 @@
-import dotenv from "dotenv";
-dotenv.config(); // Ensure env variables load before any module imports them
-
 import { env } from "./env";
 import express, { NextFunction, Request, RequestHandler, Response } from "express";
 import http from "http";
@@ -20,44 +17,13 @@ import { club } from "./chain";
 const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-
-// Dynamically allow local development and ANY production or preview deployment from Vercel
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow server-to-server or tools with no origin headers
-    if (!origin) return callback(null, true);
-    
-    const isLocal = origin.startsWith("http://localhost:");
-    const isVercel = origin.endsWith(".vercel.app");
-
-    if (isLocal || isVercel) {
-      return callback(null, true);
-    } else {
-      return callback(new Error("Blocked by global CORS policy"));
-    }
-  },
-  credentials: true
-}));
-
+const origins = env.FRONTEND_URL.split(",").map((o) => o.trim().replace(/\/$/, ""));
+app.use(cors({ origin: origins }));
 app.use(express.json({ limit: "2mb" }));
 app.use(["/api/auth", "/api/gate"], rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }));
 
 const server = http.createServer(app);
-
-// Mirror dynamic CORS support inside Socket.io initialization
-const io = new Server(server, { 
-  cors: { 
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true);
-      const isLocal = origin.startsWith("http://localhost:");
-      const isVercel = origin.endsWith(".vercel.app");
-      if (isLocal || isVercel) return callback(null, true);
-      return callback(new Error("CORS blocked"));
-    },
-    credentials: true
-  } 
-});
-
+const io = new Server(server, { cors: { origin: origins } });
 const upload = multer({ dest: path.join(__dirname, "..", "uploads"), limits: { fileSize: 200 * 1024 * 1024 } });
 
 // ---------- helpers ----------
@@ -168,6 +134,7 @@ app.post(
     const age = Number(b.age);
     if (!b.name || !b.intentions || !b.phoneNumber || !b.email || !(age >= 18))
       return res.status(400).json({ message: "Missing or invalid fields (age must be 18 or older)." });
+
     const code = String(b.code || "").trim().toUpperCase();
     const invite = await Invitation.findOneAndUpdate(
       { code, isUsed: false, expiresAt: { $gt: new Date() } },
@@ -187,7 +154,6 @@ app.post(
         intentions: b.intentions,
         phoneNumber: b.phoneNumber,
         email: b.email,
-        photo: b.photo,
       });
     } catch (e) {
       await Invitation.updateOne({ _id: invite._id }, { isUsed: false, usedBy: null });
@@ -267,24 +233,141 @@ app.post(
   requireAdmin,
   h(async (req, res) => {
     const wallet = lower(req.body.wallet);
+    if (!(await club.isApproved(wallet))) return res.status(400).json({ message: "Approve this wallet on-chain first." });
     const profile = await UserProfile.findOne({ walletAddress: wallet });
-    if (!profile) return res.status(404).json({ message: "Profile not found." });
-    
+    if (!profile) return res.status(404).json({ message: "Applicant not found." });
+    profile.registrationCode = await makeInvite(wallet);
     profile.status = "APPROVED";
     await profile.save();
     return res.json({ ok: true });
   })
 );
 
-// General Global Error Fallback Middleware
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error("Global Catch Error Trace: ", err);
-  res.status(500).json({ message: "Internal server error." });
+app.post(
+  "/api/admin/reject",
+  requireAuth,
+  requireAdmin,
+  h(async (req, res) => {
+    await UserProfile.updateOne({ walletAddress: lower(req.body.wallet) }, { status: "REJECTED" });
+    return res.json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/admin/expel",
+  requireAuth,
+  requireAdmin,
+  h(async (req, res) => {
+    const wallet = lower(req.body.wallet);
+    if (await club.isFullyActivated(wallet)) return res.status(400).json({ message: "Expel on-chain first." });
+    await UserProfile.updateOne({ walletAddress: wallet }, { status: "EXPELLED" });
+    return res.json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/admin/interviewer",
+  requireAuth,
+  requireAdmin,
+  h(async (req, res) => {
+    await UserProfile.updateOne({ walletAddress: lower(req.body.wallet) }, { isInterviewer: !!req.body.value });
+    return res.json({ ok: true });
+  })
+);
+
+// ---------- chat history ----------
+app.get(
+  "/api/chat/history",
+  requireAuth,
+  requireMember,
+  h(async (req, res) => {
+    const me = req.address as string;
+    const other = lower(req.query.with || "group");
+    if (other !== "group" && !ethers.isAddress(other)) return res.status(400).json({ message: "Bad target." });
+    const filter = other === "group" ? { to: "group" } : { $or: [{ from: me, to: other }, { from: other, to: me }] };
+    const rows = await Message.find(filter).sort({ createdAt: -1 }).limit(100);
+    return res.json(rows.reverse());
+  })
+);
+
+// ---------- meetings ----------
+app.post(
+  "/api/meetings/recordings",
+  requireAuth,
+  requireMember,
+  upload.single("video"),
+  h(async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No video uploaded." });
+    const rec = await MeetingRecording.create({
+      meetingName: String(req.body.meetingName || "Meeting").slice(0, 100),
+      recordedBy: req.address,
+      filePath: req.file.path,
+    });
+    return res.status(201).json({ id: rec._id });
+  })
+);
+
+app.get(
+  "/api/meetings",
+  requireAuth,
+  requireMember,
+  h(async (_req, res) => res.json(await MeetingRecording.find({}).select("meetingName recordedBy recordedAt").sort({ recordedAt: -1 })))
+);
+
+app.get(
+  "/api/meetings/:id/file",
+  requireAuth,
+  requireMember,
+  h(async (req, res) => {
+    const id = String(req.params.id);
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "Bad id." });
+    const rec = await MeetingRecording.findById(id);
+    if (!rec) return res.status(404).json({ message: "Not found." });
+    return res.type("video/webm").sendFile(path.resolve(rec.filePath));
+  })
+);
+
+// ---------- errors ----------
+app.use((err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+  console.error(err);
+  res.status(err.status || 500).json({ message: err.status ? err.message : "Server error." });
 });
 
-// Start Server configuration
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server executing seamlessly on port ${PORT}`);
+// ---------- realtime chat ----------
+io.use(async (socket, next) => {
+  const address = verifyToken(socket.handshake.auth?.token);
+  if (!address || !(await isMember(address))) return next(new Error("unauthorized"));
+  socket.data.address = address;
+  next();
 });
 
+io.on("connection", (socket) => {
+  const me = socket.data.address as string;
+  socket.join("group");
+  socket.join(`user:${me}`);
+
+  socket.on("message", async (p: { to?: string; text?: string }) => {
+    try {
+      const text = String(p?.text || "").trim().slice(0, 1000);
+      const to = lower(p?.to);
+      if (!text || (to !== "group" && !ethers.isAddress(to))) return;
+      const msg = await Message.create({ from: me, to, text });
+      const payload = { from: msg.from, to: msg.to, text: msg.text, createdAt: msg.createdAt };
+      if (to === "group") io.to("group").emit("message", payload);
+      else io.to(`user:${to}`).to(`user:${me}`).emit("message", payload);
+    } catch (e) {
+      console.error(e);
+    }
+  });
+});
+
+mongoose
+  .connect(env.MONGO_URI)
+  .then(() => {
+    console.log("Database connected");
+    server.listen(env.PORT, () => console.log(`API listening on port ${env.PORT}`));
+  })
+  .catch((e) => {
+    console.error("Database connection failed:", e);
+    process.exit(1);
+  });
