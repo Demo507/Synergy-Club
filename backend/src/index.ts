@@ -134,9 +134,8 @@ app.post(
       return res.status(402).json({ message: "Registration fee not found on-chain yet. Wait a few seconds and press submit again." });
 
     const age = Number(b.age);
-    if (!b.name || !b.intentions || !b.phoneNumber || !b.email || !(age >= 18) || !String(b.photo || "").startsWith("data:image/"))
-      return res.status(400).json({ message: "Missing or invalid fields (age must be 18+, photo required)." });
-
+    if (!b.name || !b.intentions || !b.phoneNumber || !b.email || !(age >= 18))
+      return res.status(400).json({ message: "Missing or invalid fields (age must be 18 or older)." });
     const code = String(b.code || "").trim().toUpperCase();
     const invite = await Invitation.findOneAndUpdate(
       { code, isUsed: false, expiresAt: { $gt: new Date() } },
