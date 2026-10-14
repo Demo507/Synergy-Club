@@ -1,22 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ethers } from "ethers";
-
+import { SYNERGY_CLUB_ABI } from "../abis/SynergyClubAbi";
 export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS as string;
 export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
 export const CHAIN_ID = BigInt(11155111); // Sepolia
 
-export const CONTRACT_ABI = [
-  "function payRegistrationFee() payable",
-  "function completeFinalActivation() payable",
-  "function approveApplicant(address applicant)",
-  "function expelMember(address member)",
-  "function withdrawFunds()",
-  "function hasPaidRegistration(address) view returns (bool)",
-  "function isApproved(address) view returns (bool)",
-  "function isFullyActivated(address) view returns (bool)",
-  "function paymentCount() view returns (uint256)",
-  "function getPayments(uint256 start, uint256 count) view returns (tuple(address payor, uint64 timestamp, uint8 paymentType, uint128 amount)[])",
-];
+export const CONTRACT_ABI = SYNERGY_CLUB_ABI;
 
 // Reads go through the user's wallet when it exists (more reliable than a public node),
 // and fall back to the public RPC when there is no wallet.
