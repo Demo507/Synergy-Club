@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ethers } from "ethers";
 import { readContract } from "@/config/web3";
 import { btnGhost, card } from "@/lib/ui";
-
+import { SYNERGY_CLUB_ABI } from "../abis/SynergyClubAbi";
 type Row = { payor: string; at: string; type: string; amount: string };
 
 export default function PaymentsTab() {
