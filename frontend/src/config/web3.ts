@@ -18,9 +18,29 @@ export const CONTRACT_ABI = [
   "function getPayments(uint256 start, uint256 count) view returns (tuple(address payor, uint64 timestamp, uint8 paymentType, uint128 amount)[])",
 ];
 
-// Read-only contract (no wallet needed)
-export const readContract = () =>
-  new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, new ethers.JsonRpcProvider(RPC_URL));
+// Reads go through the user's wallet when it exists (more reliable than a public node),
+// and fall back to the public RPC when there is no wallet.
+export const readContract = () => {
+  const eth = typeof window !== "undefined" ? (window as any).ethereum : undefined;
+  const provider = eth
+    ? new ethers.BrowserProvider(eth)
+    : new ethers.JsonRpcProvider(RPC_URL, 11155111, { staticNetwork: true, batchMaxCount: 1 });
+  return new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, provider);
+};
+
+// Ask the wallet to switch to Sepolia (ignored if the user declines)
+export async function ensureSepolia() {
+  const eth = (window as any).ethereum;
+  if (!eth) return;
+  try {
+    const current = await eth.request({ method: "eth_chainId" });
+    if (BigInt(current) !== CHAIN_ID) {
+      await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + CHAIN_ID.toString(16) }] });
+    }
+  } catch {
+    /* the user can switch the network manually */
+  }
+}
 
 // Contract connected to the user's wallet, switching MetaMask to Sepolia if needed
 export async function writeContract() {

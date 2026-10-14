@@ -7,6 +7,7 @@ export const setToken = (t: string) => {
 };
 export const getToken = () => jwt;
 
+// Retries network failures (for example while the free server wakes up)
 async function request(path: string, init: RequestInit): Promise<Response> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {

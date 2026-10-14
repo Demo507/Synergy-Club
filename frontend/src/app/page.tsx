@@ -13,6 +13,7 @@ import PaymentsTab from "@/components/PaymentsTab";
 import AchievementsTab from "@/components/AchievementsTab";
 import AdminTab from "@/components/AdminTab";
 import { api, setToken } from "@/lib/api";
+import { ensureSepolia } from "@/config/web3";
 import { btn, input } from "@/lib/ui";
 
 type Session = { address: string; role: string; profile: any };
@@ -47,6 +48,7 @@ export default function Home() {
     if (!eth) return alert("MetaMask not found. Install it first.");
     setBusy(true);
     try {
+      await ensureSepolia();
       const provider = new ethers.BrowserProvider(eth);
       const [addr]: string[] = await provider.send("eth_requestAccounts", []);
       const { message } = await api(`/api/auth/nonce?address=${addr}`);
@@ -124,7 +126,7 @@ export default function Home() {
           {session.role} // {account.slice(0, 6)}...{account.slice(-4)}
         </span>
       </header>
-      <nav className="flex gap-2 px-6 py-3 border-b border-neutral-800 overflow-x-auto">
+      <nav className="flex flex-wrap gap-2 px-6 py-3 border-b border-neutral-800">
         {tabs.map(([id, label, Icon]) => (
           <button
             key={id}

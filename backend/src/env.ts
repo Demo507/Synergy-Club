@@ -12,6 +12,6 @@ export const env = {
   JWT_SECRET: need("JWT_SECRET"),
   ADMIN_WALLET: need("ADMIN_WALLET").toLowerCase(),
   CONTRACT_ADDRESS: need("CONTRACT_ADDRESS"),
-  RPC_URL: process.env.RPC_URL || "https://alchemy.com",
-  FRONTEND_URL: process.env.FRONTEND_URL || "http://vercel.app"
+  RPC_URL: process.env.RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com",
+  FRONTEND_URL: process.env.FRONTEND_URL || "http://localhost:3000",
 };

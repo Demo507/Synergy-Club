@@ -15,21 +15,10 @@ import { ADMIN, issueNonce, requireAuth, verifyLogin, verifyToken } from "./auth
 import { club } from "./chain";
 
 const app = express();
-
-// ADD THIS TRACKING CODE BLOCK RIGHT HERE:
-app.use((req, res, next) => {
-  console.log(`🔍 Incoming Request Method: ${req.method} | URL: ${req.url}`);
-  next();
-});
-
 app.set("trust proxy", 1);
-
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-const origins = [ 
-  "http://localhost:3000", 
-  "https://synergy-club-brown.vercel.app" 
-];
-app.use(cors({ origin: origins, credentials: true }));
+const origins = env.FRONTEND_URL.split(",").map((o) => o.trim().replace(/\/$/, ""));
+app.use(cors({ origin: origins }));
 app.use(express.json({ limit: "2mb" }));
 app.use(["/api/auth", "/api/gate"], rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }));
 
@@ -70,14 +59,42 @@ const requireInterviewer = guard(async (a) => {
 
 const lower = (v: unknown) => String(v || "").toLowerCase();
 
+// Blockchain reads can fail when the public node is busy: answer with a clear message instead of a crash
+async function chain<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    console.error("Blockchain read failed:", e);
+    throw Object.assign(new Error("Could not reach the blockchain node. Try again in a moment."), { status: 503 });
+  }
+}
+
 async function makeInvite(owner: string): Promise<string> {
   const code = crypto.randomBytes(4).toString("hex").toUpperCase();
   await Invitation.create({ code, generatedBy: owner, expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
   return code;
 }
 
+// Saves a chat message and pushes it to the right people in real time
+async function sendMessage(from: string, toRaw: unknown, textRaw: unknown) {
+  const text = String(textRaw || "").trim().slice(0, 1000);
+  const to = lower(toRaw);
+  if (!text || (to !== "group" && !ethers.isAddress(to))) {
+    throw Object.assign(new Error("Message or recipient is invalid."), { status: 400 });
+  }
+  const msg = await Message.create({ from, to, text });
+  const payload = { id: String(msg._id), from: msg.from, to: msg.to, text: msg.text, createdAt: msg.createdAt };
+  if (to === "group") io.to("group").emit("message", payload);
+  else io.to(`user:${to}`).to(`user:${from}`).emit("message", payload);
+  return payload;
+}
+
 // ---------- auth ----------
-app.get(" /api/health", (_req, res) => {
+app.get("/", (_req, res) => {
+  res.json({ name: "Synergy Club API", ok: true });
+});
+
+app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
@@ -139,7 +156,7 @@ app.post(
     const address = req.address as string;
     const b = req.body;
     if (await UserProfile.exists({ walletAddress: address })) return res.status(409).json({ message: "Already registered." });
-    if (!(await club.hasPaidRegistration(address)))
+    if (!(await chain(() => club.hasPaidRegistration(address))))
       return res.status(402).json({ message: "Registration fee not found on-chain yet. Wait a few seconds and press submit again." });
 
     const age = Number(b.age);
@@ -181,7 +198,7 @@ app.post(
     const address = req.address as string;
     const profile = await UserProfile.findOne({ walletAddress: address });
     if (!profile || profile.status !== "APPROVED") return res.status(403).json({ message: "You are not approved yet." });
-    if (!(await club.isFullyActivated(address)))
+    if (!(await chain(() => club.isFullyActivated(address))))
       return res.status(402).json({ message: "Activation payment not found on-chain yet. Wait a few seconds and retry." });
     profile.status = "ACTIVATED";
     await profile.save();
@@ -244,7 +261,7 @@ app.post(
   requireAdmin,
   h(async (req, res) => {
     const wallet = lower(req.body.wallet);
-    if (!(await club.isApproved(wallet))) return res.status(400).json({ message: "Approve this wallet on-chain first." });
+    if (!(await chain(() => club.isApproved(wallet)))) return res.status(400).json({ message: "Approve this wallet on-chain first." });
     const profile = await UserProfile.findOne({ walletAddress: wallet });
     if (!profile) return res.status(404).json({ message: "Applicant not found." });
     profile.registrationCode = await makeInvite(wallet);
@@ -270,7 +287,7 @@ app.post(
   requireAdmin,
   h(async (req, res) => {
     const wallet = lower(req.body.wallet);
-    if (await club.isFullyActivated(wallet)) return res.status(400).json({ message: "Expel on-chain first." });
+    if (await chain(() => club.isFullyActivated(wallet))) return res.status(400).json({ message: "Expel on-chain first." });
     await UserProfile.updateOne({ walletAddress: wallet }, { status: "EXPELLED" });
     return res.json({ ok: true });
   })
@@ -297,8 +314,17 @@ app.get(
     if (other !== "group" && !ethers.isAddress(other)) return res.status(400).json({ message: "Bad target." });
     const filter = other === "group" ? { to: "group" } : { $or: [{ from: me, to: other }, { from: other, to: me }] };
     const rows = await Message.find(filter).sort({ createdAt: -1 }).limit(100);
-    return res.json(rows.reverse());
+    return res.json(
+      rows.reverse().map((r) => ({ id: String(r._id), from: r.from, to: r.to, text: r.text, createdAt: r.createdAt }))
+    );
   })
+);
+
+app.post(
+  "/api/chat/send",
+  requireAuth,
+  requireMember,
+  h(async (req, res) => res.status(201).json(await sendMessage(req.address as string, req.body.to, req.body.text)))
 );
 
 // ---------- meetings ----------
@@ -357,23 +383,20 @@ io.on("connection", (socket) => {
   socket.join("group");
   socket.join(`user:${me}`);
 
-  socket.on("message", async (p: { to?: string; text?: string }) => {
+  socket.on("message", async (p: { to?: string; text?: string }, ack?: (r: unknown) => void) => {
     try {
-      const text = String(p?.text || "").trim().slice(0, 1000);
-      const to = lower(p?.to);
-      if (!text || (to !== "group" && !ethers.isAddress(to))) return;
-      const msg = await Message.create({ from: me, to, text });
-      const payload = { from: msg.from, to: msg.to, text: msg.text, createdAt: msg.createdAt };
-      if (to === "group") io.to("group").emit("message", payload);
-      else io.to(`user:${to}`).to(`user:${me}`).emit("message", payload);
+      const message = await sendMessage(me, p?.to, p?.text);
+      ack?.({ ok: true, message });
     } catch (e) {
-      console.error(e);
+      ack?.({ ok: false, error: (e as Error).message });
     }
   });
 });
 
+process.on("unhandledRejection", (e) => console.error("Unhandled rejection:", e));
+
 mongoose
-  .connect(env.MONGO_URI)
+  .connect(env.MONGO_URI, { serverSelectionTimeoutMS: 15000 })
   .then(() => {
     console.log("Database connected");
     server.listen(env.PORT, () => console.log(`API listening on port ${env.PORT}`));
