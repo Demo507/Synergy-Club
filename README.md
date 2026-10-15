@@ -5,7 +5,7 @@ An **invite-only members club website** where joining works like a real club: yo
 Built by **Onu Moses**.
 
 - **Live website:** https://synergy-club-brown.vercel.app
-- **Backend (server):** https://synergy-club.onrender.com/api/health
+- **Backend (server) health check:** https://synergy-club.onrender.com/api/health
 - **Smart contract on Sepolia (test network):** _add your Etherscan link here_
 - **Code:** https://github.com/Demo507/synergy-club
 
@@ -16,7 +16,7 @@ Built by **Onu Moses**.
 ## 1. What the project does (in plain words)
 
 1. The **admin** (the person who created the club) creates invitation codes.
-2. A newcomer opens the website, connects their **crypto wallet** (MetaMask), and enters an invitation code.
+2. A newcomer opens the website, connects their **crypto wallet** (MetaMask), signs in, and enters an invitation code.
 3. They fill in the **registration form** (name, age, a few honest-answer questions, why they want to join, phone, email) and pay a small **registration fee of 0.0001 ETH**.
 4. Their application goes to the **interview area**. The admin (and any members the admin chooses as interviewers) read it and write notes.
 5. The admin **approves** or **rejects** the person. Approval gives the person a personal **registration code**.
@@ -25,12 +25,12 @@ Built by **Onu Moses**.
    - **Chat** with everyone in the group chat, or privately with any single member
    - Join **video/audio meetings** and record them
    - See the **public payment log** (who paid, when, how much)
-   - See their **achievements** and create **invitation codes** for friends (each code works once and expires after 30 days; maximum 5 active codes per person)
+   - See their **achievements** and create **invitation codes** for friends (each code works once, expires after 30 days, and each person can have at most 5 active codes)
 8. The admin can **expel** a member (the badge is destroyed and the wallet is banned), appoint **interviewers**, and **withdraw** the collected fees.
 
 ---
 
-## 2. How it is built: the three big parts
+## 2. How it is built: the big parts
 
 Think of the project like a restaurant:
 
@@ -40,6 +40,7 @@ Think of the project like a restaurant:
 | **Backend** | The kitchen: does the work, remembers orders, checks rules | `backend/` folder, hosted on **Render** |
 | **Smart contract** | The cash register and membership register that nobody can secretly change | `contracts/` folder, lives on the **blockchain** |
 | **Database** | The notebook where the kitchen writes everything down | **MongoDB Atlas** |
+| **Keep-awake monitor** | A bell that rings the kitchen every 5 minutes so it never falls asleep | **UptimeRobot** |
 
 ```
 synergy-club/
@@ -50,10 +51,10 @@ synergy-club/
 │   └── foundry.toml
 ├── backend/            The server (Node.js + Express)
 │   ├── src/
-│   │   ├── index.ts        All the server routes and real-time chat
-│   │   ├── env.ts          Reads secret settings
-│   │   ├── auth.ts         Wallet login and security checks
-│   │   ├── chain.ts        Reads the blockchain
+│   │   ├── index.ts            All the server routes and real-time chat
+│   │   ├── env.ts              Reads secret settings
+│   │   ├── auth.ts             Wallet login and security checks
+│   │   ├── chain.ts            Reads the blockchain
 │   │   └── models/Schemas.ts   Shapes of the saved data
 │   └── tsconfig.json
 └── frontend/           The website (Next.js)
@@ -66,40 +67,140 @@ synergy-club/
 
 ---
 
-## 3. The smart contract (`ClubMembership.sol`)
+## 3. The smart contract (`ClubMembership.sol`) in detail
 
-A **smart contract** is a small program that lives on a blockchain. Once it is published, nobody (not even the owner) can quietly change its rules, and every payment is recorded publicly. This one is written in **Solidity**.
+A **smart contract** is a small program that lives on a blockchain. Once published, nobody (not even the owner) can quietly change its rules, and every payment is recorded publicly. This one is written in **Solidity** and is built on **OpenZeppelin**, a library of widely used, audited contract parts.
 
-**What it keeps track of**
-- Who has paid the registration fee, who is approved, who is fully activated, who is banned
-- Which membership badge number belongs to which person
-- A public list of every payment (payer, time, amount, type)
+The contract is named **Synergy Shaking Hands Club** with the symbol **SSHC**. Each membership badge is an **NFT** (a unique digital item).
 
-**What it can do**
-| Function | In plain words | Who can use it |
+### 3.1 The fixed numbers
+| Name | Value | Meaning |
 |---|---|---|
-| `payRegistrationFee` | Pay 0.0001 ETH to apply | Anyone not banned |
-| `approveApplicant` | Approve someone who has paid | Admin only |
-| `completeFinalActivation` | Pay 0.01 ETH and receive the badge (only after approval) | Approved applicant |
-| `expelMember` | Destroy a member's badge and ban the wallet | Admin only |
-| `unban` | Allow a banned wallet to try again | Admin only |
-| `getPayments` / `paymentCount` | Show the public payment list | Anyone |
-| `withdrawFunds` | Move the collected fees to the admin wallet | Admin only |
-| `setMetadataURI` / `setContractURI` | Change the logo/description links | Admin only |
+| `REGISTRATION_FEE` | 0.0001 ETH | Exact amount to apply |
+| `ACTIVATION_FEE` | 0.01 ETH | Exact amount to become a member after approval |
 
-**Safety features**
-- **Soulbound badge:** the membership NFT can be created or destroyed but never transferred, so it cannot be sold.
-- **Two-step ownership transfer:** if the admin ever hands over ownership, the new owner must accept it, so a typing mistake cannot lose the club.
-- **Exact fees only:** the contract rejects any amount other than the exact fee.
-- **Approval required:** nobody can skip the interview by paying the activation fee early.
+These are built into the contract and cannot be changed without publishing a new contract.
 
-**Tests:** `ClubMembership.t.sol` contains 13 automatic checks (wrong fee, paying twice, skipping approval, trying to transfer the badge, expelling, withdrawing, and more). They run with Foundry.
+### 3.2 What the contract remembers (the records)
+Each of these is a list that answers "yes or no" for a wallet address, and anyone can read them for free:
+
+| Record | Question it answers |
+|---|---|
+| `hasPaidRegistration(address)` | Has this wallet paid the registration fee? |
+| `isApproved(address)` | Has the admin approved this wallet? |
+| `isFullyActivated(address)` | Is this wallet a full member right now? |
+| `isBanned(address)` | Is this wallet banned? |
+| `tokenOf(address)` | Which membership badge number does this wallet own? (0 means none) |
+
+It also keeps a **payment log**: every payment stores the payer, the time, the type (registration or activation) and the amount.
+
+### 3.3 The main functions and how each one works
+
+**`constructor(metadataURI_, contractURI_)`**: runs once, when the contract is published.
+- Saves the two links used for the logo and description (the badge link and the collection link).
+- Makes the person who published the contract the **owner (admin)**.
+- Marks the admin as paid, approved and activated, and gives the admin **badge number 1**.
+- Nobody can call this again.
+
+**`payRegistrationFee()`**: step 1 for a newcomer.
+- Who: anyone who is not banned.
+- Rules: the wallet must not be banned, must not have paid already, and must send **exactly 0.0001 ETH**.
+- What happens: the wallet is marked as paid, the payment is added to the public log, and a `FeePaid` event is announced.
+
+**`approveApplicant(address applicant)`**: the admin's approval.
+- Who: owner only.
+- Rules: the applicant must have paid the registration fee and must not be banned.
+- What happens: the wallet is marked approved and a `MemberApproved` event is announced. Without this, the next step is blocked, so nobody can skip the interview.
+
+**`completeFinalActivation()`**: step 2 for a newcomer.
+- Who: an approved applicant.
+- Rules, checked in this order: not banned, has paid registration, **is approved**, is not already a member, and sends **exactly 0.01 ETH**.
+- What happens: the wallet becomes an active member, a **membership badge is created** for it, the payment is logged, and a `FeePaid` event is announced.
+
+**`expelMember(address member)`**: removes a member.
+- Who: owner only.
+- Rules: the target cannot be the owner, and must actually hold a badge.
+- What happens: the badge is **destroyed**, the wallet loses its paid, approved and activated status, and it is **banned**. A `MemberExpelled` event is announced.
+
+**`unban(address user)`**: forgives a banned wallet.
+- Who: owner only.
+- What happens: the ban is lifted. The person has lost their status, so they must register and pay again from the start.
+
+**`paymentCount()`**: returns how many payments have been recorded. Free to read.
+
+**`getPayments(start, count)`**: returns a page of the payment log.
+- Free to read.
+- `start` is where to begin and `count` is how many to return. If `start` is past the end, you get an empty list.
+- It is built in pages so the list can grow large without breaking anything. The website reads the most recent 100.
+
+**`tokenURI(tokenId)`**: the link to the badge's description file (name, picture). Wallets and marketplaces use it to show the handshake logo. It returns the same link for every badge, and it fails if that badge does not exist (for example after it was destroyed).
+
+**`contractURI()`**: the link to the description of the whole club collection (name and logo).
+
+**`setMetadataURI(newURI)`**: the owner changes the badge description link. Announces `MetadataURIUpdated`. Owner only.
+
+**`setContractURI(newURI)`**: the owner changes the collection description link. Owner only.
+
+**`withdrawFunds()`**: moves all collected fees to the admin wallet.
+- Who: owner only.
+- What happens: the whole contract balance is sent to the owner and a `Withdrawn` event is announced. It uses a method that also works with shared (multi-signature) wallets, and it fails safely if the transfer is rejected.
+
+### 3.4 Helper functions inside the contract (not callable from outside)
+- **`_mintMember(to)`**: adds one to the badge counter, writes down which badge belongs to the wallet, and creates the badge.
+- **`_record(paymentType)`**: writes a payment into the public log and announces the `FeePaid` event.
+- **`_update(to, tokenId, auth)`**: the safety gate that makes the badge **soulbound**. It only allows a badge to be created or destroyed. Any attempt to move a badge from one wallet to another fails with the message "Non-transferable".
+
+### 3.5 Functions inherited from the standard parts
+**From the NFT standard (ERC721):** `name()`, `symbol()`, `balanceOf()`, `ownerOf()`, `getApproved()`, `isApprovedForAll()`, `approve()`, `setApprovalForAll()`, `transferFrom()`, `safeTransferFrom()` and `supportsInterface()`. The transfer and approval functions exist because the standard requires them, but they are useless here, since every transfer is rejected by the soulbound gate above.
+
+**From the ownership part (Ownable2Step):**
+- `owner()`: shows who the admin is.
+- `pendingOwner()`: shows who has been offered ownership but has not accepted yet.
+- `transferOwnership(newOwner)`: starts handing the club to someone else (owner only).
+- `acceptOwnership()`: the new person confirms. Ownership only changes at this step, so a typing mistake in the address cannot lose the club.
+- `renounceOwnership()`: gives up ownership forever. **Never call it**: the admin functions would be locked permanently.
+
+If ownership ever changes, also update `ADMIN_WALLET` on the backend so the website recognises the new admin.
+
+### 3.6 Announcements the contract makes (events)
+| Event | Announced when |
+|---|---|
+| `FeePaid` | Someone pays the registration or activation fee |
+| `MemberApproved` | The admin approves an applicant |
+| `MemberExpelled` | The admin expels a member |
+| `Withdrawn` | The admin withdraws the fees |
+| `MetadataURIUpdated` | The admin changes the badge description link |
+| `Transfer` (standard) | A badge is created or destroyed |
+| `OwnershipTransferStarted` / `OwnershipTransferred` (standard) | Admin ownership is handed over |
+
+### 3.7 Safety features
+- **Soulbound badge:** it cannot be sold or transferred.
+- **Two-step ownership transfer:** a wrong address cannot take over the club.
+- **Exact fees only:** any other amount is rejected.
+- **Approval required:** nobody can pay their way past the interview.
+- **Admin protected:** the owner cannot be expelled.
+
+### 3.8 Which function the website uses, and where
+| Website action | Contract function |
+|---|---|
+| Register screen: pay and submit | `payRegistrationFee` |
+| Admin tab: Approve | `approveApplicant` |
+| My Status: Pay 0.01 ETH and join | `completeFinalActivation` |
+| Admin tab: Expel | `expelMember` |
+| Admin tab: Withdraw funds | `withdrawFunds` |
+| Payments tab | `paymentCount` and `getPayments` |
+| Backend checks | `hasPaidRegistration`, `isApproved`, `isFullyActivated` |
+
+`unban`, `setMetadataURI`, `setContractURI` and `transferOwnership` have no button yet. Use them in Remix: open the contract under **Deployed Contracts**. Blue buttons only read (free). Orange and red buttons write to the blockchain and cost a small fee. A button that takes money needs the amount typed in the **Value** box above.
+
+### 3.9 Tests
+`ClubMembership.t.sol` contains 13 automatic checks covering: the admin's starting state, paying the registration fee, a wrong fee, paying twice, activating before registering, activating before approval, approving without payment, a non-admin trying to approve, the full joining flow, the badge being non-transferable, expelling and the ban, protecting the owner, the payment list and withdrawing, and the badge link. They run with **Foundry**.
 
 ---
 
 ## 4. The backend (the server)
 
-The backend is a program running 24/7 on Render. The website talks to it over the internet using addresses called **API routes** (they all start with `/api/`). It does the things a website cannot safely do itself: remember people, check the rules, and read the blockchain.
+The backend is a program running on Render. The website talks to it over the internet using addresses called **API routes** (they all start with `/api/`). It does the things a website cannot safely do itself: remember people, check the rules, and read the blockchain.
 
 **What it does**
 - **Wallet login:** it asks your wallet to sign a short message (free, no money moves). A correct signature proves the wallet is yours, and the server hands you a login pass valid for 12 hours.
@@ -108,14 +209,14 @@ The backend is a program running 24/7 on Render. The website talks to it over th
 - **Approvals and roles:** tracks each person's status and who may do what.
 - **Chat:** stores messages and delivers them instantly.
 - **Meetings:** stores meeting recordings.
-- **Protection:** blocks guessing attacks, blocks other websites from using the server, and hides secrets.
+- **Protection:** blocks guessing attacks, blocks other websites from using the server, and keeps secrets out of the code.
 
 **Person statuses:** `GUEST` → `PENDING_INTERVIEW` → `APPROVED` → `ACTIVATED`. A person can also be `REJECTED` or `EXPELLED`. The admin has the special role `ADMIN`.
 
 **Main routes**
 | Route | Purpose |
 |---|---|
-| `GET /api/health` | Check the server is awake |
+| `GET /api/health` | Check the server is awake (also what UptimeRobot visits) |
 | `GET /api/auth/nonce`, `POST /api/auth/login` | Wallet login |
 | `GET /api/session` | Who am I and what is my status |
 | `POST /api/gate/verify` | Check an invitation code |
@@ -148,7 +249,7 @@ Built with **Next.js** and **React**. The visual style is a dark "block" design 
 | **Admin / Interviews** (`AdminTab.tsx`) | Applicants, notes, approve, reject, expel, appoint interviewers, withdraw |
 | **Ticker** (`MarqueeHeader.tsx`) | Scrolling list of active members |
 
-Helper files: `config/web3.ts` (talks to the blockchain and wallet), `lib/api.ts` (talks to the backend and retries if the free server is waking up), `lib/ui.ts` (shared button and card styles).
+Helper files: `config/web3.ts` (talks to the blockchain and wallet), `lib/api.ts` (talks to the backend and retries if the server is waking up), `lib/ui.ts` (shared button and card styles).
 
 ---
 
@@ -162,7 +263,7 @@ Helper files: `config/web3.ts` (talks to the blockchain and wallet), `lib/api.ts
 | **JavaScript / React JSX (TSX)** | The language of websites | Screens in the browser |
 | **CSS (via Tailwind)** | Styling language | Colours, spacing, layout |
 
-**On your computer**
+**On the computer**
 | Tool | Used for |
 |---|---|
 | **Windows PowerShell** | Typing commands to install, build and publish |
@@ -178,18 +279,19 @@ Helper files: `config/web3.ts` (talks to the blockchain and wallet), `lib/api.ts
 | Service | Used for |
 |---|---|
 | **MetaMask** | Crypto wallet: login, payments, admin approvals |
-| **Remix IDE** | Compiling and publishing the smart contract |
+| **Remix IDE** | Compiling and publishing the smart contract, and calling its functions by hand |
 | **Sepolia test network** | Practice blockchain |
 | **A Sepolia faucet** | Free test ETH |
 | **Etherscan (Sepolia)** | Looking at transactions and the contract |
 | **Pinata + IPFS** | Storing the club logo and badge description files |
+| **Icons8** | The handshake icon used as the logo |
 | **MongoDB Atlas** | The cloud database |
 | **Render** | Hosting the backend |
 | **Vercel** | Hosting the website |
 | **GitHub** | Storing the code publicly |
+| **UptimeRobot** | Visits `/api/health` on the server every few minutes so Render's free plan never falls asleep, and warns if the server ever goes down |
 | **Jitsi Meet** | The video/audio meeting room |
 | **Public Sepolia node (publicnode.com)** | Reading the blockchain without a wallet |
-| **UptimeRobot (recommended)** | Pinging the server so Render's free plan does not fall asleep |
 | **Claude (Anthropic)** | AI assistant that helped write and fix the code |
 
 ---
@@ -211,7 +313,7 @@ A **dependency** is a ready-made piece of code written by someone else that we i
 | **mongoose** | Talks to MongoDB and defines the shape of saved data |
 | **cors** | Only lets our own website call the server |
 | **helmet** | Adds standard security headers |
-| **express-rate-limit** | Stops people hammering login and invite-code checks |
+| **express-rate-limit** | Stops people hammering login and invitation-code checks |
 | **jsonwebtoken** | Creates and checks the login pass after wallet sign-in |
 | **ethers** | Verifies wallet signatures and reads the blockchain |
 | **socket.io** | Real-time chat |
@@ -232,7 +334,7 @@ A **dependency** is a ready-made piece of code written by someone else that we i
 | **path** | Builds file locations for recordings |
 | **crypto** | Generates random invitation codes and one-time login numbers |
 
-### Frontend, installed by Next.js setup
+### Frontend, installed by the Next.js setup
 | Library | Used for |
 |---|---|
 | **next** | The website framework: pages, building, speed |
@@ -316,17 +418,23 @@ npm run dev
 ```
 Open `http://localhost:3000`.
 
-**To deploy:** the contract goes through Remix, the database lives on MongoDB Atlas, the backend is deployed from the `backend` folder on Render (build: `npm install --include=dev && npm run build`, start: `npm start`), and the frontend from the `frontend` folder on Vercel.
+**To deploy:**
+1. Publish the contract through Remix.
+2. Create the database on MongoDB Atlas.
+3. Deploy the `backend` folder on Render (build command `npm install --include=dev && npm run build`, start command `npm start`).
+4. Deploy the `frontend` folder on Vercel.
+5. Add a monitor on UptimeRobot for `https://YOUR-SERVER.onrender.com/api/health`.
 
 ---
 
 ## 11. Known limits
 
-- The free Render server falls asleep after 15 minutes without visitors, so the first visit can be slow. A free pinger such as UptimeRobot fixes this.
+- Render's free plan puts a server to sleep after 15 minutes without visitors. **UptimeRobot** visits the health address regularly to prevent this. If the monitor is paused or deleted, the first visit after a quiet period will be slow again.
 - Meeting recordings are stored on Render's free temporary disk, so they can disappear when the server restarts. A real launch should store them on Cloudinary or Amazon S3.
 - The free Jitsi service can limit embedded rooms. A real launch should use a paid Jitsi plan.
 - This runs on a test blockchain. Moving to real Ethereum needs a security review first.
-- The membership fee amounts are fixed inside the contract. Changing them means publishing a new contract.
+- The fee amounts are fixed inside the contract. Changing them means publishing a new contract.
+- There are no website buttons yet for `unban`, changing the logo links, or transferring ownership. These are done in Remix.
 
 ---
 
@@ -341,9 +449,10 @@ Open `http://localhost:3000`.
 | **Soulbound** | An NFT that cannot be transferred to anyone else |
 | **ETH / Sepolia ETH** | The currency of Ethereum; Sepolia ETH is free practice money |
 | **Gas** | The small network fee for each transaction |
+| **Event** | A public announcement the contract makes when something happens |
 | **API** | The list of requests the website can ask the server to do |
 | **Database** | Where the server stores its information permanently |
 | **JWT (login pass)** | A temporary digital pass that proves you signed in |
 | **IPFS** | A decentralized file storage; used for the logo and badge description |
 | **Environment variable** | A private setting kept outside the code |
-
+| **Uptime monitor** | A service that visits your server regularly to check it is alive |
